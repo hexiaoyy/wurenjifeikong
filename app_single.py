@@ -1059,39 +1059,218 @@ def page_comm():
                             f"延迟: {lc_icon} `{lat:.1f}ms`")
 
     with tab2:
-        st.subheader("MAVLink 数据流与报文显示")
-        h1, h2 = st.columns(2)
-        with h1:
-            if st.button("发送心跳包", use_container_width=True, type="primary"):
-                comm.add_heartbeat()
-                st.rerun()
-            if st.button("重置计数", use_container_width=True):
+        st.subheader("3.4.2 MAVLink 数据流与报文显示")
+
+        # ---- 数据流控制面板 ----
+        ctrl1, ctrl2, ctrl3, ctrl4 = st.columns(4)
+        with ctrl1:
+            auto_stream = st.toggle("自动发送数据流", value=False, key="auto_stream_toggle")
+        with ctrl2:
+            stream_rate = st.selectbox("发送频率", ["1Hz", "2Hz", "5Hz", "10Hz"], index=1, key="stream_rate_sel")
+        with ctrl3:
+            filter_msg = st.multiselect(
+                "消息类型筛选",
+                ["ALL", "HEARTBEAT", "ATTITUDE", "GLOBAL_POSITION_INT", "SYS_STATUS", "VFR_HUD"],
+                default=["ALL"],
+                key="msg_filter_sel",
+            )
+        with ctrl4:
+            if st.button("清空报文记录", use_container_width=True):
                 comm.heartbeat_count = 0
                 comm.message_log.clear()
                 st.rerun()
-        with h2:
-            st.metric("心跳计数", comm.heartbeat_count)
-            if comm.last_heartbeat > 0:
-                st.metric("上次心跳距今", f"{time.time() - comm.last_heartbeat:.1f}s")
 
-        if comm.message_log:
-            st.markdown("#### 最近心跳包")
-            st.json(comm.message_log[-1].data)
+        # 自动数据流: 根据频率生成各类MAVLink消息
+        if auto_stream:
+            rate_map = {"1Hz": 1.0, "2Hz": 0.5, "5Hz": 0.2, "10Hz": 0.1}
+            interval = rate_map.get(stream_rate, 0.5)
+            sim = st.session_state.mavlink_sim
 
+            # 生成完整数据流并注入到通信拓扑的报文记录
+            packets = sim.generate_all()
+            for pkt in packets:
+                comm_msg = MAVLinkMessage(
+                    msg_id=pkt.msg_id,
+                    msg_name=pkt.msg_name,
+                    source="FCU",
+                    target="GCS",
+                    timestamp=pkt.timestamp,
+                    data=pkt.payload,
+                )
+                comm.message_log.append(comm_msg)
+                if len(comm.message_log) > 500:
+                    comm.message_log = comm.message_log[-500:]
+            comm.heartbeat_count = sim.heartbeat_seq
+            comm.last_heartbeat = time.time()
+
+            # 自动刷新
+            st.markdown(f'<meta http-equiv="refresh" content="{int(interval)}">', unsafe_allow_html=True)
+
+        # ---- 数据流统计面板 ----
         st.markdown("---")
-        st.subheader("报文历史")
-        recent = comm.get_recent_messages(20)
-        if recent:
+        s1, s2, s3, s4, s5 = st.columns(5)
+        total_msgs = len(comm.message_log)
+        s1.metric("总报文数", total_msgs)
+
+        # 按类型统计
+        msg_counts = {}
+        for msg in comm.message_log:
+            msg_counts[msg.msg_name] = msg_counts.get(msg.msg_name, 0) + 1
+        s2.metric("消息类型数", len(msg_counts))
+        s3.metric("心跳包", msg_counts.get("HEARTBEAT", 0))
+        s4.metric("姿态数据", msg_counts.get("ATTITUDE", 0))
+        s5.metric("GPS位置", msg_counts.get("GLOBAL_POSITION_INT", 0))
+
+        # ---- 数据流方向可视化 ----
+        st.markdown("---")
+        st.subheader("数据流方向示意")
+        flow_cols = st.columns(3)
+        # FCU -> OBC 数据流
+        fcu_msgs = [m for m in comm.message_log if m.source == "FCU"]
+        obc_msgs = [m for m in comm.message_log if m.source == "OBC"]
+
+        with flow_cols[0]:
+            st.markdown("**FCU -> OBC** (传感器数据)")
+            st.progress(min(1.0, len(fcu_msgs) / 100))
+            st.caption(f"已发送 {len(fcu_msgs)} 条报文")
+            flow_detail_fcu = {}
+            for m in fcu_msgs[-50:]:
+                flow_detail_fcu[m.msg_name] = flow_detail_fcu.get(m.msg_name, 0) + 1
+            if flow_detail_fcu:
+                for name, count in sorted(flow_detail_fcu.items(), key=lambda x: -x[1]):
+                    st.markdown(f"  - `{name}`: {count}")
+
+        with flow_cols[1]:
+            st.markdown("**OBC -> GCS** (转发数据)")
+            st.progress(min(1.0, len(obc_msgs) / 100))
+            st.caption(f"已发送 {len(obc_msgs)} 条报文")
+
+        with flow_cols[2]:
+            st.markdown("**GCS -> OBC** (指令)")
+            gcs_msgs = [m for m in comm.message_log if m.source == "GCS"]
+            st.progress(min(1.0, len(gcs_msgs) / 100))
+            st.caption(f"已发送 {len(gcs_msgs)} 条报文")
+
+        # ---- 数据流时序图(文本形式) ----
+        st.markdown("---")
+        st.subheader("数据流时序图")
+        st.markdown("展示最近报文在各节点间的传递顺序")
+
+        recent_all = comm.get_recent_messages(15)
+        if recent_all:
+            timeline_html = """
+            <div style="font-family: monospace; font-size: 11px; overflow-x: auto; padding: 10px;
+                        background: #1e1e1e; color: #d4d4d4; border-radius: 8px; line-height: 1.6;">
+            <div style="display: flex; gap: 40px; margin-bottom: 8px; color: #888;">
+                <span style="width:80px;">时间</span>
+                <span style="width:60px;">方向</span>
+                <span style="width:120px;">消息类型</span>
+                <span style="width:200px;">关键字段</span>
+            </div>
+            """
+            for msg in reversed(recent_all):
+                t = time.strftime("%H:%M:%S", time.localtime(msg.timestamp))
+                direction = f"{msg.source[:3]}->{msg.target[:3]}"
+                # 消息类型颜色
+                color_map = {
+                    "HEARTBEAT": "#569cd6",
+                    "ATTITUDE": "#ce9178",
+                    "GLOBAL_POSITION_INT": "#6a9955",
+                    "SYS_STATUS": "#dcdcaa",
+                    "VFR_HUD": "#c586c0",
+                }
+                color = color_map.get(msg.msg_name, "#d4d4d4")
+
+                # 提取关键字段
+                keys = []
+                if "type" in msg.data:
+                    keys.append(f"type={msg.data['type']}")
+                if "pitch" in msg.data:
+                    keys.append(f"P={msg.data['pitch']}°")
+                if "roll" in msg.data:
+                    keys.append(f"R={msg.data['roll']}°")
+                if "alt" in msg.data:
+                    keys.append(f"alt={msg.data['alt']}")
+                if "voltage_battery" in msg.data:
+                    keys.append(f"V={msg.data['voltage_battery']}V")
+                if "groundspeed" in msg.data:
+                    keys.append(f"GS={msg.data['groundspeed']}m/s")
+                key_str = " | ".join(keys[:4])
+
+                timeline_html += (
+                    f'<div style="display: flex; gap: 40px;">'
+                    f'<span style="width:80px; color:#888;">{t}</span>'
+                    f'<span style="width:60px; color:#4ec9b0;">{direction}</span>'
+                    f'<span style="width:120px; color:{color}; font-weight:bold;">{msg.msg_name}</span>'
+                    f'<span style="width:200px; color:#9cdcfe;">{key_str}</span>'
+                    f'</div>'
+                )
+            timeline_html += "</div>"
+            st.components.v1.html(timeline_html, height=320)
+        else:
+            st.info("暂无数据流记录，请开启自动发送或手动发送心跳包")
+
+        # ---- 手动发送控制 ----
+        st.markdown("---")
+        st.subheader("手动发送 MAVLink 报文")
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            if st.button("发送心跳包", use_container_width=True, type="primary"):
+                comm.add_heartbeat()
+                st.rerun()
+        with m2:
+            if st.button("发送姿态数据", use_container_width=True):
+                sim = st.session_state.mavlink_sim
+                pkt = sim.generate_attitude()
+                comm.message_log.append(MAVLinkMessage(
+                    msg_id=pkt.msg_id, msg_name=pkt.msg_name,
+                    source="FCU", target="GCS", timestamp=pkt.timestamp, data=pkt.payload,
+                ))
+                st.rerun()
+        with m3:
+            if st.button("发送GPS位置", use_container_width=True):
+                sim = st.session_state.mavlink_sim
+                pkt = sim.generate_gps_position()
+                comm.message_log.append(MAVLinkMessage(
+                    msg_id=pkt.msg_id, msg_name=pkt.msg_name,
+                    source="FCU", target="GCS", timestamp=pkt.timestamp, data=pkt.payload,
+                ))
+                st.rerun()
+
+        # ---- 报文详细历史表格 ----
+        st.markdown("---")
+        st.subheader("报文历史记录")
+        display_msgs = comm.get_recent_messages(50)
+        if "ALL" not in filter_msg:
+            display_msgs = [m for m in display_msgs if m.msg_name in filter_msg]
+        if display_msgs:
             rows = []
-            for msg in reversed(recent):
+            for msg in reversed(display_msgs):
+                direction = f"{msg.source} -> {msg.target}"
+                data_str = json.dumps(msg.data, ensure_ascii=False)
                 rows.append({
                     "时间": time.strftime("%H:%M:%S", time.localtime(msg.timestamp)),
-                    "来源": msg.source, "消息": msg.msg_name,
-                    "数据": json.dumps(msg.data, ensure_ascii=False)[:60],
+                    "方向": direction,
+                    "MsgID": f"0x{msg.msg_id:02X}",
+                    "消息名称": msg.msg_name,
+                    "数据内容": data_str[:80] + ("..." if len(data_str) > 80 else ""),
                 })
-            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.dataframe(rows, use_container_width=True, hide_index=True, height=400)
         else:
             st.info("暂无报文记录")
+
+        # ---- 最近报文原始JSON ----
+        if comm.message_log:
+            with st.expander("查看最新报文原始数据 (JSON)"):
+                latest = comm.message_log[-1]
+                st.json({
+                    "msg_id": latest.msg_id,
+                    "msg_name": latest.msg_name,
+                    "source": latest.source,
+                    "target": latest.target,
+                    "timestamp": latest.timestamp,
+                    "payload": latest.data,
+                })
 
 
 # ============================================================
