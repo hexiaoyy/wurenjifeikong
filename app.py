@@ -82,7 +82,7 @@ def gcj02_to_wgs84(lng, lat):
     return wgs_lng, wgs_lat
 
 
-NJVT_CENTER_WGS84 = (118.7993, 32.1080)
+NJVT_CENTER_WGS84 = (118.6405, 32.1592)
 NJVT_CENTER_GCJ02 = wgs84_to_gcj02(*NJVT_CENTER_WGS84)
 
 # ============================================================
@@ -202,7 +202,7 @@ class FlightPlanner:
 
     def _get_ref_point(self):
         if not self.obstacles:
-            return 118.7993, 32.1080
+            return 118.6405, 32.1592
         lngs = [c[0] for obs in self.obstacles for c in obs.coordinates]
         lats = [c[1] for obs in self.obstacles for c in obs.coordinates]
         return sum(lngs) / len(lngs), sum(lats) / len(lats)
@@ -350,7 +350,7 @@ class FlightPlanner:
 # ============================================================
 # MapUtils (map_utils.py)
 # ============================================================
-DEFAULT_CENTER_WGS84 = (118.7993, 32.1080)
+DEFAULT_CENTER_WGS84 = (118.6405, 32.1592)
 DEFAULT_ZOOM = 17
 
 
@@ -546,7 +546,7 @@ class MAVLinkSimulator:
         self.running = False
         self.flight_mode = "STABILIZED"
         self.armed = False
-        self.state = {"lat": 32.1080, "lng": 118.7993, "alt": 0.0, "heading": 0.0, "pitch": 0.0, "roll": 0.0, "yaw": 0.0, "ground_speed": 0.0, "air_speed": 0.0, "climb_rate": 0.0, "battery_voltage": 22.2, "battery_remaining": 100, "throttle": 0, "gps_fix": 0, "gps_satellites": 0, "flight_mode": "STABILIZED", "armed": False}
+        self.state = {"lat": 32.1592, "lng": 118.6405, "alt": 0.0, "heading": 0.0, "pitch": 0.0, "roll": 0.0, "yaw": 0.0, "ground_speed": 0.0, "air_speed": 0.0, "climb_rate": 0.0, "battery_voltage": 22.2, "battery_remaining": 100, "throttle": 0, "gps_fix": 0, "gps_satellites": 0, "flight_mode": "STABILIZED", "armed": False}
         self.message_log: List[MAVLinkPacket] = []
         self.max_log_size = 200
 
@@ -676,7 +676,7 @@ def init_session_state():
         "monitor_running": False,
         "selected_plan": None,
         "point_a": list(NJVT_CENTER_WGS84),
-        "point_b": [118.8020, 32.1070],
+        "point_b": [118.6435, 32.1572],
         "flight_height": 50.0,
         "safety_radius": 10.0,
     }
@@ -749,8 +749,8 @@ def page_map():
         st.subheader("坐标转换工具")
         st.markdown("**WGS-84 -> GCJ-02**")
         c1 = st.columns(2)
-        wgs_lng = c1[0].number_input("经度", value=118.7993, key="wgs_lng", format="%.6f")
-        wgs_lat = c1[1].number_input("纬度", value=32.1080, key="wgs_lat", format="%.6f")
+        wgs_lng = c1[0].number_input("经度", value=118.6405, key="wgs_lng", format="%.6f")
+        wgs_lat = c1[1].number_input("纬度", value=32.1592, key="wgs_lat", format="%.6f")
         gcj_lng, gcj_lat = wgs84_to_gcj02(wgs_lng, wgs_lat)
         st.success(f"GCJ-02: ({gcj_lng:.6f}, {gcj_lat:.6f})")
 
@@ -768,10 +768,10 @@ def page_map():
         st.markdown("---")
         st.subheader("设置航点坐标")
         c3 = st.columns(2)
-        a_lng = c3[0].number_input("A点经度", value=118.7970, key="a_lng", format="%.6f")
-        a_lat = c3[0].number_input("A点纬度", value=32.1090, key="a_lat", format="%.6f")
-        b_lng = c3[1].number_input("B点经度", value=118.8020, key="b_lng", format="%.6f")
-        b_lat = c3[1].number_input("B点纬度", value=32.1070, key="b_lat", format="%.6f")
+        a_lng = c3[0].number_input("A点经度", value=118.6385, key="a_lng", format="%.6f")
+        a_lat = c3[0].number_input("A点纬度", value=32.1612, key="a_lat", format="%.6f")
+        b_lng = c3[1].number_input("B点经度", value=118.6435, key="b_lng", format="%.6f")
+        b_lat = c3[1].number_input("B点纬度", value=32.1572, key="b_lat", format="%.6f")
         if st.button("确认航点", use_container_width=True):
             st.session_state.point_a = [a_lng, a_lat]
             st.session_state.point_b = [b_lng, b_lat]
