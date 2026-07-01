@@ -650,6 +650,472 @@ def render_map(m, key=None, height=600):
     return st_folium(m, key=key, height=height, use_container_width=True)
 
 
+# ============================================================
+# SVG 仪表盘绘制函数
+# ============================================================
+
+def _attitude_indicator_svg(pitch, roll):
+    """绘制姿态指示器（人工地平线）SVG，根据pitch/roll角度偏移地平线"""
+    # pitch: 俯仰角（度），roll: 横滚角（度）
+    pitch_offset = max(-50, min(50, pitch)) * 0.8  # 限制偏移范围
+    roll_angle = max(-60, min(60, roll))          # 限制横滚范围
+
+    svg = f'''
+    <svg viewBox="0 0 220 220" width="220" height="220" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <clipPath id="aiClip">
+          <circle cx="110" cy="110" r="95"/>
+        </clipPath>
+      </defs>
+      <!-- 外圈 -->
+      <circle cx="110" cy="110" r="98" fill="none" stroke="#00d4ff" stroke-width="2" opacity="0.6"/>
+      <!-- 背景圆 -->
+      <circle cx="110" cy="110" r="95" fill="#0d1117"/>
+      <!-- 天空和地面（用clipPath裁切，通过rotate和translate实现姿态变化） -->
+      <g clip-path="url(#aiClip)">
+        <g transform="rotate({roll_angle}, 110, 110)">
+          <!-- 天空（蓝色） -->
+          <rect x="0" y="0" width="220" height="110" fill="#1a5276" transform="translate(0, {pitch_offset})"/>
+          <!-- 地面（棕色） -->
+          <rect x="0" y="110" width="220" height="220" fill="#7d5a3c" transform="translate(0, {pitch_offset})"/>
+          <!-- 地平线 -->
+          <line x1="0" y1="110" x2="220" y2="110" stroke="white" stroke-width="2" transform="translate(0, {pitch_offset})"/>
+          <!-- 俯仰刻度线 -->
+          <line x1="90" y1="80" x2="110" y2="80" stroke="white" stroke-width="1" opacity="0.5" transform="translate(0, {pitch_offset})"/>
+          <line x1="90" y1="95" x2="110" y2="95" stroke="white" stroke-width="1" opacity="0.7" transform="translate(0, {pitch_offset})"/>
+          <line x1="90" y1="125" x2="110" y2="125" stroke="white" stroke-width="1" opacity="0.7" transform="translate(0, {pitch_offset})"/>
+          <line x1="90" y1="140" x2="110" y2="140" stroke="white" stroke-width="1" opacity="0.5" transform="translate(0, {pitch_offset})"/>
+        </g>
+      </g>
+      <!-- 固定十字准线 -->
+      <line x1="70" y1="110" x2="95" y2="110" stroke="#f59e0b" stroke-width="2"/>
+      <line x1="125" y1="110" x2="150" y2="110" stroke="#f59e0b" stroke-width="2"/>
+      <circle cx="110" cy="110" r="3" fill="#f59e0b"/>
+      <!-- 横滚角弧线 -->
+      <path d="M 30 110 A 80 80 0 0 1 40 55" fill="none" stroke="#00d4ff" stroke-width="1.5" opacity="0.7"/>
+      <path d="M 180 110 A 80 80 0 0 0 170 55" fill="none" stroke="#00d4ff" stroke-width="1.5" opacity="0.7"/>
+      <!-- 横滚指示三角 -->
+      <polygon points="110,18 105,28 115,28" fill="#f59e0b" transform="rotate({roll_angle}, 110, 110)"/>
+      <!-- 数据标注 -->
+      <text x="110" y="210" text-anchor="middle" fill="#a0a0a0" font-size="10" font-family="monospace">P:{pitch:.1f}° R:{roll:.1f}°</text>
+    </svg>'''
+    return svg
+
+
+def _battery_svg(percentage, voltage):
+    """绘制电池状态条SVG，根据电量百分比显示不同颜色"""
+    pct = max(0, min(100, percentage))
+    # 颜色阈值：>30% 绿色，>15% 黄色，<=15% 红色
+    if pct > 30:
+        bar_color = "#10b981"
+    elif pct > 15:
+        bar_color = "#f59e0b"
+    else:
+        bar_color = "#ef4444"
+
+    bar_width = pct * 1.5  # 最大150px
+
+    svg = f'''
+    <svg viewBox="0 0 200 60" width="200" height="60" xmlns="http://www.w3.org/2000/svg">
+      <!-- 电池外壳 -->
+      <rect x="10" y="10" width="160" height="35" rx="4" ry="4" fill="none" stroke="#a0a0a0" stroke-width="2"/>
+      <!-- 电池正极端子 -->
+      <rect x="170" y="20" width="8" height="15" rx="2" ry="2" fill="#a0a0a0"/>
+      <!-- 电池填充 -->
+      <rect x="12" y="12" width="{bar_width}" height="31" rx="3" ry="3" fill="{bar_color}" opacity="0.85">
+        <animate attributeName="opacity" values="0.85;1;0.85" dur="2s" repeatCount="indefinite"/>
+      </rect>
+      <!-- 百分比文字 -->
+      <text x="90" y="33" text-anchor="middle" fill="white" font-size="14" font-weight="bold" font-family="monospace">{pct:.0f}%</text>
+      <!-- 电压标注 -->
+      <text x="90" y="57" text-anchor="middle" fill="#a0a0a0" font-size="10" font-family="monospace">{voltage:.2f}V</text>
+    </svg>'''
+    return svg
+
+
+def _heading_svg(heading):
+    """绘制航向罗盘SVG，指针指向当前航向"""
+    hdg = heading % 360
+    # 将航向角转为SVG旋转角（0°=北朝上，顺时针）
+    svg = f'''
+    <svg viewBox="0 0 200 200" width="200" height="200" xmlns="http://www.w3.org/2000/svg">
+      <!-- 外圈 -->
+      <circle cx="100" cy="100" r="92" fill="none" stroke="#00d4ff" stroke-width="2" opacity="0.5"/>
+      <circle cx="100" cy="100" r="88" fill="#0d1117" opacity="0.8"/>
+      <!-- 罗盘刻度 - 旋转整个刻度盘，使当前航向对准上方 -->
+      <g transform="rotate({-hdg}, 100, 100)">
+        <!-- 主方向标注 N/E/S/W -->
+        <text x="100" y="28" text-anchor="middle" fill="#ef4444" font-size="16" font-weight="bold" font-family="sans-serif">N</text>
+        <text x="100" y="183" text-anchor="middle" fill="#a0a0a0" font-size="12" font-family="sans-serif">S</text>
+        <text x="178" y="104" text-anchor="middle" fill="#a0a0a0" font-size="12" font-family="sans-serif">E</text>
+        <text x="22" y="104" text-anchor="middle" fill="#a0a0a0" font-size="12" font-family="sans-serif">W</text>
+        <!-- 30度刻度线 -->
+        <line x1="100" y1="16" x2="100" y2="22" stroke="#a0a0a0" stroke-width="1.5" transform="rotate(30, 100, 100)"/>
+        <line x1="100" y1="16" x2="100" y2="22" stroke="#a0a0a0" stroke-width="1.5" transform="rotate(60, 100, 100)"/>
+        <line x1="100" y1="16" x2="100" y2="22" stroke="#a0a0a0" stroke-width="1.5" transform="rotate(120, 100, 100)"/>
+        <line x1="100" y1="16" x2="100" y2="22" stroke="#a0a0a0" stroke-width="1.5" transform="rotate(150, 100, 100)"/>
+        <line x1="100" y1="16" x2="100" y2="22" stroke="#a0a0a0" stroke-width="1.5" transform="rotate(210, 100, 100)"/>
+        <line x1="100" y1="16" x2="100" y2="22" stroke="#a0a0a0" stroke-width="1.5" transform="rotate(240, 100, 100)"/>
+        <line x1="100" y1="16" x2="100" y2="22" stroke="#a0a0a0" stroke-width="1.5" transform="rotate(300, 100, 100)"/>
+        <line x1="100" y1="16" x2="100" y2="22" stroke="#a0a0a0" stroke-width="1.5" transform="rotate(330, 100, 100)"/>
+        <!-- 10度小刻度 -->
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(10, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(20, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(40, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(50, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(70, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(80, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(100, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(110, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(130, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(140, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(160, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(170, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(190, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(200, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(220, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(230, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(250, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(260, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(280, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(290, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(310, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(320, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(340, 100, 100)"/>
+        <line x1="100" y1="18" x2="100" y2="24" stroke="#606060" stroke-width="0.8" transform="rotate(350, 100, 100)"/>
+      </g>
+      <!-- 固定指示箭头（始终朝上，指向当前航向） -->
+      <polygon points="100,35 93,52 107,52" fill="#f59e0b"/>
+      <line x1="100" y1="52" x2="100" y2="75" stroke="#f59e0b" stroke-width="2"/>
+      <!-- 中心圆点 -->
+      <circle cx="100" cy="100" r="4" fill="#0d1117" stroke="#f59e0b" stroke-width="1.5"/>
+      <!-- 航向数字标注 -->
+      <text x="100" y="196" text-anchor="middle" fill="#a0a0a0" font-size="10" font-family="monospace">HDG: {hdg:.0f}°</text>
+    </svg>'''
+    return svg
+
+
+# ============================================================
+# 暗色科技风CSS主题
+# ============================================================
+
+_DARK_THEME_CSS = '''
+/* ===== 全局暗色主题 ===== */
+[data-testid="stAppViewContainer"] {
+    background: #0d1117 !important;
+    color: #e6edf3 !important;
+}
+
+/* 主内容区背景 */
+.stMain [data-testid="stVerticalBlockBorderWrapper"] {
+    background: transparent !important;
+}
+
+.block-container {
+    padding-top: 1rem !important;
+    padding-bottom: 2rem !important;
+}
+
+/* ===== 侧边栏深蓝渐变 ===== */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0f1b2d 0%, #1a2940 100%) !important;
+    border-right: 1px solid rgba(0, 212, 255, 0.15) !important;
+}
+[data-testid="stSidebar"] * {
+    color: #e6edf3 !important;
+}
+[data-testid="stSidebar"] .stRadio label {
+    color: #c9d1d9 !important;
+}
+[data-testid="stSidebar"] .stRadio label:hover {
+    color: #00d4ff !important;
+}
+[data-testid="stSidebar"] .stRadio [aria-checked="true"] label {
+    color: #00d4ff !important;
+    font-weight: bold;
+}
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] p {
+    color: #8b949e !important;
+}
+[data-testid="stSidebar"] hr {
+    border-color: rgba(0, 212, 255, 0.2) !important;
+}
+
+/* ===== 标题渐变色 ===== */
+.gradient-title {
+    background: linear-gradient(90deg, #00d4ff, #7c3aed);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-size: 1.6rem;
+    font-weight: 700;
+    padding: 12px 20px;
+    border-radius: 10px;
+}
+
+/* ===== 通用卡片容器（玻璃态） ===== */
+.uav-card {
+    background: rgba(22, 33, 62, 0.75);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(10px);
+    transition: border-color 0.3s ease;
+}
+.uav-card:hover {
+    border-color: rgba(0, 212, 255, 0.45);
+}
+
+/* 带渐变边框的卡片 */
+.uav-card-bordered {
+    background: rgba(22, 33, 62, 0.8);
+    border: 1px solid transparent;
+    border-image: linear-gradient(135deg, #00d4ff, #7c3aed) 1;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+/* border-image 不支持圆角，用 outline 替代 */
+.uav-card-gradient {
+    background: rgba(22, 33, 62, 0.8);
+    border: 1px solid rgba(0, 212, 255, 0.25);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    outline: 2px solid transparent;
+    outline-offset: -1px;
+    background-clip: padding-box;
+    position: relative;
+}
+
+/* ===== Metric 卡片玻璃态 ===== */
+[data-testid="stMetric"] {
+    background: rgba(22, 33, 62, 0.6) !important;
+    border: 1px solid rgba(0, 212, 255, 0.15) !important;
+    border-radius: 10px !important;
+    padding: 12px 16px !important;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+    backdrop-filter: blur(8px);
+}
+[data-testid="stMetric"] label {
+    color: #8b949e !important;
+    font-size: 0.8rem !important;
+}
+[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    color: #00d4ff !important;
+}
+
+/* ===== 按钮样式 ===== */
+.stButton > button {
+    background: linear-gradient(135deg, #00d4ff 0%, #7c3aed 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    box-shadow: 0 4px 15px rgba(0, 212, 255, 0.3) !important;
+    transition: all 0.3s ease !important;
+}
+.stButton > button:hover {
+    box-shadow: 0 6px 25px rgba(0, 212, 255, 0.5) !important;
+    transform: translateY(-1px);
+}
+.stButton > button:active {
+    transform: translateY(0px);
+}
+/* 次要按钮 */
+.stButton > button:not([class*="primary"]) {
+    background: linear-gradient(135deg, #1a2940 0%, #0f1b2d 100%) !important;
+    border: 1px solid rgba(0, 212, 255, 0.3) !important;
+}
+/* 停止按钮特殊样式（红色） */
+.stButton > button[kind="stop"],
+.stButton > button[value="⏹ 停止监控"] {
+    background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%) !important;
+}
+
+/* ===== 数据表格深色主题 ===== */
+[data-testid="stDataFrame"] {
+    background: rgba(22, 33, 62, 0.6) !important;
+    border: 1px solid rgba(0, 212, 255, 0.15) !important;
+    border-radius: 10px !important;
+}
+[data-testid="stDataFrame"] table {
+    background: transparent !important;
+    color: #e6edf3 !important;
+}
+[data-testid="stDataFrame"] th {
+    background: rgba(0, 212, 255, 0.1) !important;
+    color: #00d4ff !important;
+    border-bottom: 1px solid rgba(0, 212, 255, 0.2) !important;
+}
+[data-testid="stDataFrame"] td {
+    color: #c9d1d9 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+/* ===== Tabs 深色主题 ===== */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px;
+    background: rgba(22, 33, 62, 0.4);
+    border-radius: 10px;
+    padding: 4px;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 8px !important;
+    color: #8b949e !important;
+}
+.stTabs [data-baseweb="tab-highlight"] {
+    background-color: #00d4ff !important;
+    border-radius: 8px !important;
+}
+.stTabs [aria-selected="true"] {
+    color: white !important;
+    font-weight: 600 !important;
+}
+
+/* ===== Selectbox / Checkbox 深色 ===== */
+.stSelectbox, .stCheckbox {
+    color: #e6edf3 !important;
+}
+
+/* ===== Expander ===== */
+.streamlit-expanderHeader {
+    background: rgba(22, 33, 62, 0.5) !important;
+    color: #00d4ff !important;
+    border: 1px solid rgba(0, 212, 255, 0.15) !important;
+    border-radius: 8px !important;
+}
+
+/* ===== 渐变分隔线 ===== */
+.uav-divider {
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #00d4ff, #7c3aed, transparent);
+    border: none;
+    margin: 20px 0;
+    border-radius: 1px;
+}
+
+/* ===== section subheader 图标样式 ===== */
+.uav-subheader {
+    color: #00d4ff;
+    font-size: 1.05rem;
+    font-weight: 600;
+    padding: 8px 0 4px 0;
+}
+
+/* ===== 进度条 ===== */
+.stProgress > div > div > div {
+    background: linear-gradient(90deg, #00d4ff, #7c3aed) !important;
+}
+
+/* ===== Form 输入框 ===== */
+.stTextInput, .stNumberInput, .stTextArea, .stSelectbox {
+    background: rgba(22, 33, 62, 0.6) !important;
+}
+
+/* ===== Code block ===== */
+.stCodeBlock {
+    background: rgba(13, 17, 23, 0.9) !important;
+    border: 1px solid rgba(0, 212, 255, 0.15) !important;
+    border-radius: 8px !important;
+}
+
+/* ===== Success/Warning/Error 消息 ===== */
+.stSuccess, [data-testid="stAlert"][data-baseweb="notification"][kind="success"] {
+    background: rgba(16, 185, 129, 0.15) !important;
+    border-left: 3px solid #10b981 !important;
+    color: #10b981 !important;
+}
+.stWarning, [data-testid="stAlert"][data-baseweb="notification"][kind="warning"] {
+    background: rgba(245, 158, 11, 0.15) !important;
+    border-left: 3px solid #f59e0b !important;
+    color: #f59e0b !important;
+}
+.stError, [data-testid="stAlert"][data-baseweb="notification"][kind="error"] {
+    background: rgba(239, 68, 68, 0.15) !important;
+    border-left: 3px solid #ef4444 !important;
+    color: #ef4444 !important;
+}
+.stInfo, [data-testid="stAlert"][data-baseweb="notification"][kind="info"] {
+    background: rgba(0, 212, 255, 0.1) !important;
+    border-left: 3px solid #00d4ff !important;
+    color: #00d4ff !important;
+}
+
+/* ===== 侧边栏状态指示器 ===== */
+.sidebar-status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+    animation: pulse-dot 2s infinite;
+}
+.sidebar-status-dot.online { background: #10b981; box-shadow: 0 0 6px #10b981; }
+.sidebar-status-dot.offline { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* ===== 侧边栏导航项图标间距 ===== */
+.nav-item-icon {
+    margin-right: 8px;
+    font-size: 1.1em;
+}
+
+/* ===== Sidebar 顶部 Logo 区域 ===== */
+.sidebar-logo {
+    text-align: center;
+    padding: 16px 0 12px 0;
+}
+.sidebar-logo svg {
+    filter: drop-shadow(0 0 8px rgba(0, 212, 255, 0.4));
+}
+.sidebar-title {
+    background: linear-gradient(90deg, #00d4ff, #7c3aed);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+/* ===== Tooltip / Popover ===== */
+[data-testid="stPopover"] {
+    background: #1a2940 !important;
+}
+'''
+
+
+# ============================================================
+# 通用页面标题渲染
+# ============================================================
+
+def _render_page_title(title_text):
+    """渲染渐变色页面标题"""
+    st.markdown(f'''
+    <div class="gradient-title">{title_text}</div>
+    ''', unsafe_allow_html=True)
+    st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+
+
+def _render_subheader(icon, text):
+    """渲染带图标的section subheader"""
+    st.markdown(f'''
+    <div class="uav-subheader">{icon} {text}</div>
+    ''', unsafe_allow_html=True)
+
+
 # 页面配置(必须在第一个st命令之前)
 st.set_page_config(
     page_title="无人机飞行规划与监控系统",
@@ -658,12 +1124,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.markdown("""
-<style>
-    .stApp { max-width: 100%; }
-    .block-container { padding-top: 1rem; }
-</style>
-""", unsafe_allow_html=True)
+# 注入全局暗色主题CSS
+st.markdown(f'''<style>{_DARK_THEME_CSS}</style>''', unsafe_allow_html=True)
 
 
 def init_session_state():
@@ -690,13 +1152,50 @@ def init_session_state():
 
 
 def sidebar_navigation():
-    st.sidebar.title("导航菜单")
-    st.sidebar.markdown("---")
+    """升级版侧边栏：SVG Logo + 渐变标题 + 图标导航 + 状态指示器"""
+    # 顶部Logo区域
+    st.sidebar.markdown('''
+    <div class="sidebar-logo">
+        <svg viewBox="0 0 120 80" width="80" height="55" xmlns="http://www.w3.org/2000/svg">
+            <!-- 无人机机身 -->
+            <ellipse cx="60" cy="45" rx="18" ry="8" fill="#00d4ff" opacity="0.8"/>
+            <rect x="55" y="32" width="10" height="26" rx="3" fill="#00d4ff" opacity="0.6"/>
+            <!-- 机臂 -->
+            <line x1="30" y1="40" x2="42" y2="44" stroke="#7c3aed" stroke-width="3" stroke-linecap="round"/>
+            <line x1="78" y1="44" x2="90" y2="40" stroke="#7c3aed" stroke-width="3" stroke-linecap="round"/>
+            <line x1="42" y1="48" x2="35" y2="55" stroke="#7c3aed" stroke-width="3" stroke-linecap="round"/>
+            <line x1="78" y1="48" x2="85" y2="55" stroke="#7c3aed" stroke-width="3" stroke-linecap="round"/>
+            <!-- 电机 -->
+            <circle cx="28" cy="38" r="5" fill="none" stroke="#00d4ff" stroke-width="1.5"/>
+            <circle cx="92" cy="38" r="5" fill="none" stroke="#00d4ff" stroke-width="1.5"/>
+            <circle cx="33" cy="56" r="5" fill="none" stroke="#00d4ff" stroke-width="1.5"/>
+            <circle cx="87" cy="56" r="5" fill="none" stroke="#00d4ff" stroke-width="1.5"/>
+            <!-- 螺旋桨 -->
+            <ellipse cx="28" cy="38" rx="12" ry="3" fill="rgba(0,212,255,0.25)" stroke="rgba(0,212,255,0.5)" stroke-width="0.5"/>
+            <ellipse cx="92" cy="38" rx="12" ry="3" fill="rgba(0,212,255,0.25)" stroke="rgba(0,212,255,0.5)" stroke-width="0.5"/>
+            <ellipse cx="33" cy="56" rx="12" ry="3" fill="rgba(0,212,255,0.25)" stroke="rgba(0,212,255,0.5)" stroke-width="0.5"/>
+            <ellipse cx="87" cy="56" rx="12" ry="3" fill="rgba(0,212,255,0.25)" stroke="rgba(0,212,255,0.5)" stroke-width="0.5"/>
+            <!-- LED灯 -->
+            <circle cx="20" cy="36" r="2" fill="#10b981"/>
+            <circle cx="100" cy="36" r="2" fill="#ef4444"/>
+            <circle cx="25" cy="54" r="2" fill="#f59e0b"/>
+            <circle cx="95" cy="54" r="2" fill="#f59e0b"/>
+            <!-- 天线 -->
+            <line x1="60" y1="32" x2="60" y2="20" stroke="#a0a0a0" stroke-width="1"/>
+            <circle cx="60" cy="18" r="2" fill="#00d4ff" opacity="0.7"/>
+        </svg>
+        <div class="sidebar-title">UAV Flight System</div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+    st.sidebar.markdown('<hr style="border-color: rgba(0,212,255,0.2);">', unsafe_allow_html=True)
+
+    # 导航菜单（带图标前缀）
     pages = {
-        "map": "3.1 地图定位模块",
-        "obstacle": "3.2 障碍物与航线规划",
-        "monitor": "3.3 飞行监控模块",
-        "comm": "3.4 通信链路展示",
+        "map": "🗺️  3.1 地图定位模块",
+        "obstacle": "🚧  3.2 障碍物与航线规划",
+        "monitor": "📡  3.3 飞行监控模块",
+        "comm": "🔗  3.4 通信链路展示",
     }
     selected = st.sidebar.radio(
         "功能模块",
@@ -705,7 +1204,20 @@ def sidebar_navigation():
         index=list(pages.keys()).index(st.session_state.get("page", "map")),
     )
     st.session_state.page = selected
-    st.sidebar.markdown("---")
+
+    st.sidebar.markdown('<hr style="border-color: rgba(0,212,255,0.2);">', unsafe_allow_html=True)
+
+    # 底部系统状态指示器
+    is_running = st.session_state.get("monitor_running", False)
+    status_class = "online" if is_running else "offline"
+    status_text = "系统运行中" if is_running else "系统待机"
+    st.sidebar.markdown(f'''
+    <div style="padding: 8px 4px; font-size: 0.85rem;">
+        <span class="sidebar-status-dot {status_class}"></span>
+        <span style="color: #8b949e;">{status_text}</span>
+    </div>
+    ''', unsafe_allow_html=True)
+
     st.sidebar.caption("南京科技职业学院\n无人机飞行规划与监控系统 v1.0")
 
 
@@ -713,7 +1225,7 @@ def sidebar_navigation():
 # 3.1 地图定位模块
 # ============================================================
 def page_map():
-    st.header("3.1 地图定位模块")
+    _render_page_title("3.1 地图定位模块")
     st.markdown("基于 OpenStreetMap 的校园地图显示，支持 WGS-84/GCJ-02 坐标系转换")
 
     col1, col2 = st.columns([2, 1])
@@ -746,7 +1258,13 @@ def page_map():
                 st.info(f"点击位置: 纬度={c['lat']:.6f}, 经度={c['lng']:.6f}")
 
     with col2:
-        st.subheader("坐标转换工具")
+        # 坐标转换工具 - 卡片容器包裹
+        st.markdown('''
+        <div class="uav-card">
+            <div style="color: #00d4ff; font-weight: 600; font-size: 0.95rem; margin-bottom: 10px;">
+                🔄 坐标转换工具
+            </div>
+        ''', unsafe_allow_html=True)
         st.markdown("**WGS-84 -> GCJ-02**")
         c1 = st.columns(2)
         wgs_lng = c1[0].number_input("经度", value=118.7620, key="wgs_lng", format="%.6f")
@@ -760,13 +1278,29 @@ def page_map():
         gi_lat = c2[1].number_input("纬度", value=round(gcj_lat, 6), key="gcj_lat_in", format="%.6f")
         rl, ra = gcj02_to_wgs84(gi_lng, gi_lat)
         st.success(f"WGS-84: ({rl:.6f}, {ra:.6f})")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown("---")
-        st.subheader("坐标参考点")
+        st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+
+        # 坐标参考点 - 带图标卡片
+        st.markdown('''
+        <div class="uav-card">
+            <div style="color: #00d4ff; font-weight: 600; font-size: 0.95rem; margin-bottom: 10px;">
+                📍 坐标参考点
+            </div>
+        ''', unsafe_allow_html=True)
         st.code(f"南京科技职业学院(校园中心)\nWGS-84: ({NJVT_CENTER_WGS84[0]}, {NJVT_CENTER_WGS84[1]})\nGCJ-02: ({NJVT_CENTER_GCJ02[0]:.6f}, {NJVT_CENTER_GCJ02[1]:.6f})")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown("---")
-        st.subheader("设置航点坐标")
+        st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+
+        # 设置航点坐标
+        st.markdown('''
+        <div class="uav-card">
+            <div style="color: #00d4ff; font-weight: 600; font-size: 0.95rem; margin-bottom: 10px;">
+                🎯 设置航点坐标
+            </div>
+        ''', unsafe_allow_html=True)
         c3 = st.columns(2)
         a_lng = c3[0].number_input("A点经度", value=118.7600, key="a_lng", format="%.6f")
         a_lat = c3[0].number_input("A点纬度", value=32.2470, key="a_lat", format="%.6f")
@@ -777,13 +1311,14 @@ def page_map():
             st.session_state.point_b = [b_lng, b_lat]
             st.success("航点已设置!")
             st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ============================================================
 # 3.2 障碍物与航线规划模块
 # ============================================================
 def page_obstacle():
-    st.header("3.2 障碍物与航线规划模块")
+    _render_page_title("3.2 障碍物与航线规划模块")
     obs_mgr = st.session_state.obstacle_mgr
 
     tab1, tab2, tab3 = st.tabs(["障碍物管理", "航线规划", "JSON数据"])
@@ -792,14 +1327,14 @@ def page_obstacle():
         col_left, col_right = st.columns([2, 1])
 
         with col_left:
-            st.subheader("3.2.1 多边形圈选障碍物")
+            _render_subheader("🚧", "3.2.1 多边形圈选障碍物")
             m = MapUtils.create_base_map()
             if obs_mgr.obstacles:
                 MapUtils.add_obstacle_polygons(m, obs_mgr.obstacles)
             render_map(m, key="obstacle_draw_map", height=500)
 
-            st.markdown("---")
-            st.subheader("手动添加障碍物")
+            st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+            _render_subheader("➕", "手动添加障碍物")
             with st.form("add_obstacle_form"):
                 obs_name = st.text_input("障碍物名称", value=f"障碍物{len(obs_mgr.obstacles) + 1}")
                 obs_height = st.number_input("高度(米)", min_value=0, max_value=500, value=30)
@@ -826,7 +1361,7 @@ def page_obstacle():
                         st.error("坐标格式错误，请使用: 经度,纬度")
 
         with col_right:
-            st.subheader("已标记障碍物")
+            _render_subheader("📋", "已标记障碍物")
             if obs_mgr.obstacles:
                 for i, obs in enumerate(obs_mgr.obstacles):
                     with st.expander(f"{obs.name} ({obs.height}m)"):
@@ -839,7 +1374,7 @@ def page_obstacle():
                         if st.button("删除", key=f"del_{i}"):
                             obs_mgr.remove_obstacle(i)
                             st.rerun()
-                st.markdown("---")
+                st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
                 if st.button("清空所有", use_container_width=True):
                     obs_mgr.obstacles.clear()
                     obs_mgr.save_to_file()
@@ -848,7 +1383,7 @@ def page_obstacle():
                 st.info("暂无障碍物，请手动添加")
 
     with tab2:
-        st.subheader("3.2.3 飞行参数设置")
+        _render_subheader("⚙️", "3.2.3 飞行参数设置")
         c1, c2, c3 = st.columns(3)
         st.session_state.flight_height = c1.number_input("飞行高度(m)", min_value=1, max_value=500, value=50, key="fh")
         st.session_state.safety_radius = c2.number_input("安全半径(m)", min_value=1, max_value=100, value=10, key="sr")
@@ -871,7 +1406,7 @@ def page_obstacle():
 
         if st.session_state.selected_plan:
             results = st.session_state.selected_plan
-            st.subheader("3.2.4 航线规划结果对比")
+            _render_subheader("📊", "3.2.4 航线规划结果对比")
             cols = st.columns(len(results))
             colors = ["#4CAF50", "#2196F3", "#FF9800", "#9C27B0"]
 
@@ -887,7 +1422,7 @@ def page_obstacle():
 
             if "current_display_plan" in st.session_state:
                 sel = st.session_state.current_display_plan
-                st.markdown("---")
+                st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
                 cm, ci = st.columns([2, 1])
                 with cm:
                     mp = MapUtils.create_base_map()
@@ -896,7 +1431,7 @@ def page_obstacle():
                     MapUtils.add_flight_path(mp, sel, color=colors[results.index(sel) % len(colors)])
                     render_map(mp, key="plan_disp", height=500)
                 with ci:
-                    st.subheader(f"方案: {sel['name']}")
+                    _render_subheader("📋", f"方案: {sel['name']}")
                     st.write(f"距离: **{sel['distance']:.1f}m**")
                     st.write(f"航点: **{len(sel['waypoints'])}**")
                     st.write(f"安全: {'✅' if sel['clears_obstacles'] else '❌'}")
@@ -904,12 +1439,12 @@ def page_obstacle():
                         st.code(f"WP{i}: ({wp[0]:.6f}, {wp[1]:.6f})")
 
     with tab3:
-        st.subheader("3.2.2 障碍物 JSON 数据")
+        _render_subheader("📄", "3.2.2 障碍物 JSON 数据")
         js = obs_mgr.to_json_string()
         st.code(js, language="json")
         st.download_button("下载 JSON", js.encode("utf-8"), "obstacles_data.json", "application/json")
 
-        st.markdown("---")
+        st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
         uploaded = st.file_uploader("上传 JSON 文件", type=["json"])
         if uploaded:
             try:
@@ -928,10 +1463,13 @@ def page_obstacle():
 # 3.3 飞行监控模块
 # ============================================================
 def page_monitor():
-    st.header("3.3 飞行监控模块")
+    _render_page_title("3.3 飞行监控模块")
     sim = st.session_state.mavlink_sim
 
-    # 控制栏
+    # 控制栏 - 带渐变边框的卡片
+    st.markdown('''
+    <div class="uav-card" style="border-image: linear-gradient(135deg, #00d4ff, #7c3aed) 1;">
+    ''', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     with c1:
         if not st.session_state.monitor_running:
@@ -954,13 +1492,21 @@ def page_monitor():
         st.markdown(f"心跳: `{sim.heartbeat_seq}` | "
                     f"状态: `{'运行' if sim.running else '停止'}` | "
                     f"电机: `{'解锁' if sim.armed else '锁定'}`")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     if st.session_state.monitor_running:
         sim.generate_all()
 
-    # 仪表盘
-    st.markdown("---")
+    # 仪表盘 - 6个metric用3x2网格布局在卡片内
+    st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
     state = sim.state
+
+    st.markdown('''
+    <div class="uav-card">
+        <div style="color: #00d4ff; font-weight: 600; font-size: 0.95rem; margin-bottom: 12px;">
+            📊 核心飞行参数
+        </div>
+    ''', unsafe_allow_html=True)
     mc = st.columns(6)
     for col, (label, val) in zip(mc, [
         ("纬度", f"{state['lat']:.6f}°"), ("经度", f"{state['lng']:.6f}°"),
@@ -968,27 +1514,69 @@ def page_monitor():
         ("航向", f"{state['heading']:.0f}°"), ("电池", f"{state['battery_remaining']:.0f}%"),
     ]):
         col.metric(label, val)
+    st.markdown('</div>', unsafe_allow_html=True)
 
+    # SVG仪表盘区域：姿态指示器 / 电池状态 / 航向罗盘
     d1, d2, d3 = st.columns(3)
+
     with d1:
-        st.subheader("姿态")
-        st.markdown(f"Pitch: **{state['pitch']:.2f}°**\nRoll: **{state['roll']:.2f}°**\nYaw: **{state['yaw']:.2f}°**")
+        st.markdown('''
+        <div class="uav-card" style="text-align: center;">
+            <div style="color: #00d4ff; font-weight: 600; font-size: 0.95rem; margin-bottom: 8px;">
+                🧭 姿态指示器
+            </div>
+        ''', unsafe_allow_html=True)
+        # 渲染SVG姿态指示器
+        ai_svg = _attitude_indicator_svg(state["pitch"], state["roll"])
+        st.components.v1.html(ai_svg, height=230)
+        st.markdown(f"Pitch: **{state['pitch']:.2f}°**  |  Roll: **{state['roll']:.2f}°**  |  Yaw: **{state['yaw']:.2f}°**")
+        st.markdown('</div>', unsafe_allow_html=True)
+
     with d2:
-        st.subheader("导航")
-        st.markdown(f"GPS: **{'3D Fix' if state['gps_fix'] == 3 else 'No Fix'}**\n"
-                    f"卫星: **{state['gps_satellites']}**\n"
-                    f"垂直速度: **{state['climb_rate']:.2f}m/s**")
-    with d3:
-        st.subheader("电源")
+        st.markdown('''
+        <div class="uav-card" style="text-align: center;">
+            <div style="color: #00d4ff; font-weight: 600; font-size: 0.95rem; margin-bottom: 8px;">
+                🔋 电池状态
+            </div>
+        ''', unsafe_allow_html=True)
+        # 渲染SVG电池状态条
+        bat_svg = _battery_svg(state["battery_remaining"], state["battery_voltage"])
+        st.components.v1.html(bat_svg, height=70)
         bc = "🟢" if state["battery_remaining"] > 30 else ("🟡" if state["battery_remaining"] > 15 else "🔴")
-        st.markdown(f"电压: **{state['battery_voltage']:.2f}V** {bc}\n"
-                    f"剩余: **{state['battery_remaining']:.0f}%**\n"
-                    f"油门: **{state['throttle']}%**\n"
-                    f"模式: **{state['flight_mode']}**")
+        st.markdown(f"剩余: **{state['battery_remaining']:.0f}%** {bc}")
+        st.markdown(f"油门: **{state['throttle']}%**")
+        st.markdown(f"模式: **{state['flight_mode']}**")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with d3:
+        st.markdown('''
+        <div class="uav-card" style="text-align: center;">
+            <div style="color: #00d4ff; font-weight: 600; font-size: 0.95rem; margin-bottom: 8px;">
+                🧭 航向罗盘
+            </div>
+        ''', unsafe_allow_html=True)
+        # 渲染SVG航向罗盘
+        hdg_svg = _heading_svg(state["heading"])
+        st.components.v1.html(hdg_svg, height=210)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # 导航信息面板
+    st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+    st.markdown('''
+    <div class="uav-card">
+        <div style="color: #00d4ff; font-weight: 600; font-size: 0.95rem; margin-bottom: 8px;">
+            📡 导航状态
+        </div>
+    ''', unsafe_allow_html=True)
+    nav_cols = st.columns(3)
+    nav_cols[0].metric("GPS状态", "3D Fix" if state['gps_fix'] == 3 else "No Fix")
+    nav_cols[1].metric("卫星数", state['gps_satellites'])
+    nav_cols[2].metric("垂直速度", f"{state['climb_rate']:.2f}m/s")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # 监控地图
-    st.markdown("---")
-    st.subheader("实时位置地图")
+    st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+    _render_subheader("🗺️", "实时位置地图")
     mm = MapUtils.create_base_map(center=(state["lng"], state["lat"]))
     folium.Marker(
         location=[state["lat"], state["lng"]],
@@ -1004,8 +1592,8 @@ def page_monitor():
     render_map(mm, key="mon_map", height=400)
 
     # MAVLink 报文日志
-    st.markdown("---")
-    st.subheader("MAVLink 报文日志")
+    st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+    _render_subheader("📝", "MAVLink 报文日志")
     log_data = sim.get_log_table_data(30)
     if log_data:
         st.dataframe(log_data, use_container_width=True, hide_index=True)
@@ -1023,21 +1611,35 @@ def page_monitor():
 # 3.4 通信链路展示模块
 # ============================================================
 def page_comm():
-    st.header("3.4 通信链路展示模块")
+    _render_page_title("3.4 通信链路展示模块")
     comm = st.session_state.comm_topology
 
     tab1, tab2 = st.tabs(["3.4.1 通信拓扑", "3.4.2 MAVLink数据流"])
 
     with tab1:
-        st.subheader("GCS - OBC - FCU 通信拓扑结构")
+        _render_subheader("🌐", "GCS - OBC - FCU 通信拓扑结构")
+        # 拓扑图区域添加渐变边框装饰
+        st.markdown('''
+        <div class="uav-card" style="padding: 10px; border-image: linear-gradient(135deg, #00d4ff, #7c3aed) 1;">
+        ''', unsafe_allow_html=True)
         st.components.v1.html(comm.generate_topology_html(), height=530)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown("---")
+        st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+
+        # 节点状态统计 - 卡片包裹
         ss = comm.get_node_status_summary()
+        st.markdown('''
+        <div class="uav-card">
+            <div style="color: #00d4ff; font-weight: 600; font-size: 0.95rem; margin-bottom: 12px;">
+                📊 节点状态总览
+            </div>
+        ''', unsafe_allow_html=True)
         s1, s2, s3 = st.columns(3)
         s1.metric("总节点", ss["total"])
         s2.metric("在线", ss["online"])
         s3.metric("离线", ss["offline"])
+        st.markdown('</div>', unsafe_allow_html=True)
 
         for node in comm.nodes:
             icon = "🟢" if node.status == "online" else "🔴"
@@ -1047,8 +1649,12 @@ def page_comm():
                 ci[1].write(f"端口: `{node.port}`")
                 ci[2].write(f"状态: `{node.status}`")
 
-        st.markdown("---")
-        st.subheader("链路信息")
+        st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+        _render_subheader("📡", "链路信息")
+        # 链路信息用卡片包裹
+        st.markdown('''
+        <div class="uav-card">
+        ''', unsafe_allow_html=True)
         lc = st.columns(min(len(comm.links), 4))
         for i, link in enumerate(comm.links):
             with lc[i % len(lc)]:
@@ -1057,9 +1663,10 @@ def page_comm():
                 st.markdown(f"**{link.source[:4]} -> {link.target[:4]}**\n"
                             f"协议: `{link.protocol}`\n"
                             f"延迟: {lc_icon} `{lat:.1f}ms`")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with tab2:
-        st.subheader("3.4.2 MAVLink 数据流与报文显示")
+        _render_subheader("📡", "3.4.2 MAVLink 数据流与报文显示")
 
         # ---- 数据流控制面板 ----
         ctrl1, ctrl2, ctrl3, ctrl4 = st.columns(4)
@@ -1107,7 +1714,13 @@ def page_comm():
             st.markdown(f'<meta http-equiv="refresh" content="{int(interval)}">', unsafe_allow_html=True)
 
         # ---- 数据流统计面板 ----
-        st.markdown("---")
+        st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+        st.markdown('''
+        <div class="uav-card">
+            <div style="color: #00d4ff; font-weight: 600; font-size: 0.95rem; margin-bottom: 12px;">
+                📈 数据流统计
+            </div>
+        ''', unsafe_allow_html=True)
         s1, s2, s3, s4, s5 = st.columns(5)
         total_msgs = len(comm.message_log)
         s1.metric("总报文数", total_msgs)
@@ -1120,10 +1733,14 @@ def page_comm():
         s3.metric("心跳包", msg_counts.get("HEARTBEAT", 0))
         s4.metric("姿态数据", msg_counts.get("ATTITUDE", 0))
         s5.metric("GPS位置", msg_counts.get("GLOBAL_POSITION_INT", 0))
+        st.markdown('</div>', unsafe_allow_html=True)
 
         # ---- 数据流方向可视化 ----
-        st.markdown("---")
-        st.subheader("数据流方向示意")
+        st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+        _render_subheader("🔀", "数据流方向示意")
+        st.markdown('''
+        <div class="uav-card">
+        ''', unsafe_allow_html=True)
         flow_cols = st.columns(3)
         # FCU -> OBC 数据流
         fcu_msgs = [m for m in comm.message_log if m.source == "FCU"]
@@ -1150,24 +1767,26 @@ def page_comm():
             gcs_msgs = [m for m in comm.message_log if m.source == "GCS"]
             st.progress(min(1.0, len(gcs_msgs) / 100))
             st.caption(f"已发送 {len(gcs_msgs)} 条报文")
+        st.markdown('</div>', unsafe_allow_html=True)
 
         # ---- 数据流时序图(文本形式) ----
-        st.markdown("---")
-        st.subheader("数据流时序图")
+        st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+        _render_subheader("⏱️", "数据流时序图")
         st.markdown("展示最近报文在各节点间的传递顺序")
 
         recent_all = comm.get_recent_messages(15)
         if recent_all:
-            timeline_html = """
+            timeline_html = '''
             <div style="font-family: monospace; font-size: 11px; overflow-x: auto; padding: 10px;
-                        background: #1e1e1e; color: #d4d4d4; border-radius: 8px; line-height: 1.6;">
+                        background: #1e1e1e; color: #d4d4d4; border-radius: 8px; line-height: 1.6;
+                        border: 1px solid rgba(0,212,255,0.15);">
             <div style="display: flex; gap: 40px; margin-bottom: 8px; color: #888;">
                 <span style="width:80px;">时间</span>
                 <span style="width:60px;">方向</span>
                 <span style="width:120px;">消息类型</span>
                 <span style="width:200px;">关键字段</span>
             </div>
-            """
+            '''
             for msg in reversed(recent_all):
                 t = time.strftime("%H:%M:%S", time.localtime(msg.timestamp))
                 direction = f"{msg.source[:3]}->{msg.target[:3]}"
@@ -1211,8 +1830,8 @@ def page_comm():
             st.info("暂无数据流记录，请开启自动发送或手动发送心跳包")
 
         # ---- 手动发送控制 ----
-        st.markdown("---")
-        st.subheader("手动发送 MAVLink 报文")
+        st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+        _render_subheader("📤", "手动发送 MAVLink 报文")
         m1, m2, m3 = st.columns(3)
         with m1:
             if st.button("发送心跳包", use_container_width=True, type="primary"):
@@ -1238,8 +1857,8 @@ def page_comm():
                 st.rerun()
 
         # ---- 报文详细历史表格 ----
-        st.markdown("---")
-        st.subheader("报文历史记录")
+        st.markdown('<hr class="uav-divider">', unsafe_allow_html=True)
+        _render_subheader("📋", "报文历史记录")
         display_msgs = comm.get_recent_messages(50)
         if "ALL" not in filter_msg:
             display_msgs = [m for m in display_msgs if m.msg_name in filter_msg]
