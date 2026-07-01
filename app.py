@@ -363,9 +363,9 @@ class MapUtils:
             zoom = DEFAULT_ZOOM
         map_center = [center[1], center[0]]
         
-        # 根据选择切换底图图层
+        # 图层配置
         tiles_map = {
-            "标准地图": ("OpenStreetMap", "OpenStreetMap contributors"),
+            "标准地图": ("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", "OpenStreetMap contributors"),
             "卫星地图": ("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", "Esri World Imagery"),
             "地形图": ("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", "OpenTopoMap"),
         }
@@ -373,7 +373,7 @@ class MapUtils:
         
         m = folium.Map(location=map_center, zoom_start=zoom, tiles=tiles_url, attr=tiles_attr)
         
-        # 同时添加所有图层到LayerControl（备用切换方式）
+        # 添加其他图层到 LayerControl
         for name, (url, attr) in tiles_map.items():
             if url != tiles_url:
                 folium.TileLayer(tiles=url, attr=attr, name=name, overlay=False, control=True).add_to(m)
