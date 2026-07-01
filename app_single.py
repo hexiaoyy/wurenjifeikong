@@ -356,16 +356,29 @@ DEFAULT_ZOOM = 17
 
 class MapUtils:
     @staticmethod
-    def create_base_map(center=None, zoom=None, use_gcj02=False):
+    def create_base_map(center=None, zoom=None, use_gcj02=False, layer_type="标准地图"):
         if center is None:
             center = DEFAULT_CENTER_WGS84
         if zoom is None:
             zoom = DEFAULT_ZOOM
         map_center = [center[1], center[0]]
-        m = folium.Map(location=map_center, zoom_start=zoom, tiles="OpenStreetMap", attr="OpenStreetMap contributors")
-        folium.TileLayer(tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri World Imagery", name="卫星地图", overlay=False, control=True).add_to(m)
-        folium.TileLayer(tiles="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", attr="OpenTopoMap", name="地形图", overlay=False, control=True).add_to(m)
+        
+        # 根据选择切换底图图层
+        tiles_map = {
+            "标准地图": ("OpenStreetMap", "OpenStreetMap contributors"),
+            "卫星地图": ("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", "Esri World Imagery"),
+            "地形图": ("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", "OpenTopoMap"),
+        }
+        tiles_url, tiles_attr = tiles_map.get(layer_type, tiles_map["标准地图"])
+        
+        m = folium.Map(location=map_center, zoom_start=zoom, tiles=tiles_url, attr=tiles_attr)
+        
+        # 同时添加所有图层到LayerControl（备用切换方式）
+        for name, (url, attr) in tiles_map.items():
+            if url != tiles_url:
+                folium.TileLayer(tiles=url, attr=attr, name=name, overlay=False, control=True).add_to(m)
         folium.LayerControl().add_to(m)
+        
         draw = Draw(draw_options={"polygon": True, "polyline": False, "rectangle": False, "circle": False, "circlemarker": False, "marker": True}, edit_options={"edit": True, "remove": True})
         m.add_child(draw)
         return m
@@ -1232,9 +1245,15 @@ def page_map():
 
     with col1:
         use_gcj02 = st.checkbox("使用 GCJ-02 坐标系（火星坐标系）", value=False)
+        layer_type = st.selectbox(
+            "地图图层",
+            ["标准地图", "卫星地图", "地形图"],
+            format_func=lambda x: {"标准地图": "🗺️ 标准地图 (OpenStreetMap)", "卫星地图": "🛰️ 卫星地图 (Esri)", "地形图": "⛰️ 地形图 (OpenTopoMap)"}[x],
+            key="map_layer_sel",
+        )
         center = NJVT_CENTER_GCJ02 if use_gcj02 else NJVT_CENTER_WGS84
 
-        m = MapUtils.create_base_map(center=center)
+        m = MapUtils.create_base_map(center=center, layer_type=layer_type)
         folium.Marker(
             location=[center[1], center[0]],
             popup=f"校园中心 ({center[0]:.6f}, {center[1]:.6f})",
